@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Roulette Pro - Final Fix</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #111827; user-select: none; -webkit-tap-highlight-color: transparent; }
+        
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+
+        /* 보드 래퍼: 가로 스크롤 시 여백 확보 */
+        .board-wrapper {
+            display: inline-block;
+            padding: 20px 10px;
+            background-color: #1f2937; /* 테이블 테두리 색 */
+            border-radius: 12px;
+            border: 4px solid #374151;
+        }
+
+        /* 룰렛 그리드 정의 */
+        .roulette-grid {
+            display: grid;
+            /* 0구역(50px) | 숫자 12열(48px) | 2to1(40px) */
+            grid-template-columns: 50px repeat(12, 48px) 40px; 
+            /* 숫자 3행 | Dozens | Outside */
+            grid-template-rows: repeat(3, 48px) 44px 44px; 
+            gap: 4px;
+        }
+
+        /* 기본 셀 스타일 */
+        .cell {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            font-weight: 800; border-radius: 4px; cursor: pointer;
+            color: white; font-size: 14px; position: relative;
+            transition: all 0.1s;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1), 0 2px 0 rgba(0,0,0,0.3);
+        }
+        .cell:active { transform: translateY(2px); box-shadow: none; }
+        
+        /* 배당률 메모 스타일 */
+        .payout-note {
+            font-size: 8px;
+            font-weight: 400;
+            color: #fde047; /* yellow-300 */
+            opacity: 0.7;
+            margin-top: -2px;
+        }
+
+        /* 승리 효과 */
+        .cell.winner { 
+            border: 2px solid #fbbf24; 
+            box-shadow: 0 0 15px #fbbf24; 
+            z-index: 50; 
+            transform: scale(1.1);
+            filter: brightness(1.2);
+        }
+
+        /* 색상 유틸리티 */
+        .bg-red-felt { background-color: #ef4444; }
+        .bg-black-felt { background-color: #1f2937; border: 1px solid #374151; }
+        .bg-green-felt { background-color: #15803d; }
+        .bg-gold-felt { background-color: transparent; border: 1px solid #d4af37; color: #d4af37; }
+        .bg-dark { background-color: #374151; }
+
+        /* 칩 뱃지 */
+        .chip-badge {
+            position: absolute; top: -6px; right: -6px;
+            background: #ef4444; color: white;
+            font-size: 10px; font-weight: bold;
+            padding: 1px 5px; border-radius: 10px;
+            border: 1px solid white; z-index: 20;
+            box-shadow: 0 2px 2px rgba(0,0,0,0.5);
+        }
+
+        /* 0과 00 영역 레이아웃 수정 (Flexbox 사용) */
+        .zeros-col {
+            grid-column: 1; 
+            grid-row: 1 / 4; /* 숫자 행 전체(1~3) 차지 */
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .zero-cell {
+            flex: 1; /* 높이 50%씩 균등 분할 */
+            width: 100%;
+            border-radius: 4px;
+            clip-path: none; /* 이전 코드의 clip-path 제거 */
+        }
+        /* 00은 위쪽, 0은 아래쪽 모양 다듬기 (선택사항: 여기선 사각형 유지) */
+        
+        /* 컨트롤 패널 */
+        .chip-btn {
+            width: 48px; height: 48px; border-radius: 50%;
+            border: 2px dashed rgba(255,255,255,0.3);
+            display: flex; align-items: center; justify-content: center;
+            font-weight: bold; font-size: 11px; color: white;
+            transition: all 0.2s; background: #4b5563; flex-shrink: 0;
+        }
+        .chip-btn.selected {
+            border: 2px solid #fbbf24; transform: scale(1.15);
+            background: #1f2937; box-shadow: 0 0 8px #fbbf24;
+        }
+
+        /* 히스토리 볼 */
+        .history-ball {
+            width: 28px; height: 28px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 11px; font-weight: bold; color: white; margin-right: 6px; flex-shrink: 0;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        /* 승리 플로팅 텍스트 애니메이션 */
+        @keyframes floatUp {
+            0% { transform: translate(-50%, 0); opacity: 1; }
+            100% { transform: translate(-50%, -40px); opacity: 0; }
+        }
+        .float-win {
+            position: absolute; left: 50%; top: -20px; transform: translateX(-50%);
+            color: #4ade80; font-weight: 900; font-size: 16px;
+            text-shadow: 0 2px 4px rgba(0,0,0,1); pointer-events: none;
+            animation: floatUp 1.2s ease-out forwards; z-index: 100; white-space: nowrap;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col text-white overflow-hidden bg-gray-900">
+
+    <div class="bg-gray-800 p-3 shadow-md z-10 border-b border-gray-700">
+        <div class="flex justify-between items-center mb-2">
+            <h1 class="text-lg font-bold text-yellow-400 tracking-tight">Roulette <span class="text-xs text-gray-500">Pro</span></h1>
+            <div class="bg-gray-900 px-3 py-1 rounded-lg border border-gray-600 flex items-center">
+                <span class="text-[10px] text-gray-400 mr-2">CREDIT</span>
+                <span id="balanceDisplay" class="font-mono font-bold text-green-400 text-lg">1,000</span>
+            </div>
+        </div>
+        <div id="historyContainer" class="flex overflow-x-auto no-scrollbar items-center h-10 bg-gray-950 rounded px-2 border border-gray-700 shadow-inner">
+            <span class="text-[10px] text-gray-500 mr-2 whitespace-nowrap">HISTORY</span>
+        </div>
+    </div>
+
+    <div class="flex-1 overflow-y-auto no-scrollbar bg-gray-900 flex flex-col items-center">
+        
+        <div class="w-full bg-gray-800 py-4 shadow-lg mb-4 text-center border-b border-gray-700 sticky top-0 z-20">
+             <div id="resultDisplay" class="text-3xl font-black text-white h-10 flex items-center justify-center tracking-widest drop-shadow-md">READY</div>
+             <div id="gameMessage" class="text-xs text-gray-400 mt-1 h-4">베팅을 시작하세요</div>
+        </div>
+
+        <div class="w-full overflow-x-auto no-scrollbar px-2 text-center">
+            <div class="board-wrapper">
+                <div class="roulette-grid" id="boardGrid">
+                    
+                    <div class="zeros-col">
+                        <div id="bet-00" class="cell zero-cell bg-green-felt" onclick="placeBet('00')">
+                            <span>00</span>
+                            <span class="payout-note">35:1</span>
+                        </div>
+                        <div id="bet-0" class="cell zero-cell bg-green-felt" onclick="placeBet('0')">
+                            <span>0</span>
+                            <span class="payout-note">35:1</span>
+                        </div>
+                    </div>
+
+                    <div id="bet-2to1_3" class="cell bg-gold-felt" style="grid-column: 14; grid-row: 1" onclick="placeBet('2to1_3')">
+                        <span>2:1</span>
+                    </div>
+                    <div id="bet-2to1_2" class="cell bg-gold-felt" style="grid-column: 14; grid-row: 2" onclick="placeBet('2to1_2')">
+                        <span>2:1</span>
+                    </div>
+                    <div id="bet-2to1_1" class="cell bg-gold-felt" style="grid-column: 14; grid-row: 3" onclick="placeBet('2to1_1')">
+                        <span>2:1</span>
+                    </div>
+
+                    <div id="bet-1st12" class="cell bg-dark" style="grid-column: 2/6; grid-row: 4" onclick="placeBet('1st12')">
+                        <span>1st 12</span>
+                        <span class="payout-note">2:1</span>
+                    </div>
+                    <div id="bet-2nd12" class="cell bg-dark" style="grid-column: 6/10; grid-row: 4" onclick="placeBet('2nd12')">
+                        <span>2nd 12</span>
+                        <span class="payout-note">2:1</span>
+                    </div>
+                    <div id="bet-3rd12" class="cell bg-dark" style="grid-column: 10/14; grid-row: 4" onclick="placeBet('3rd12')">
+                        <span>3rd 12</span>
+                        <span class="payout-note">2:1</span>
+                    </div>
+
+                    <div id="bet-1-18"  class="cell bg-dark" style="grid-column: 2/4; grid-row: 5" onclick="placeBet('1-18')">
+                        <span>1-18</span>
+                        <span class="payout-note">1:1</span>
+                    </div>
+                    <div id="bet-Even"  class="cell bg-dark" style="grid-column: 4/6; grid-row: 5" onclick="placeBet('Even')">
+                        <span>Even</span>
+                        <span class="payout-note">1:1</span>
+                    </div>
+                    <div id="bet-Red"   class="cell bg-red-felt" style="grid-column: 6/8; grid-row: 5" onclick="placeBet('Red')">
+                        <span>Red</span>
+                        <span class="payout-note">1:1</span>
+                    </div>
+                    <div id="bet-Black" class="cell bg-black-felt" style="grid-column: 8/10; grid-row: 5" onclick="placeBet('Black')">
+                        <span>Black</span>
+                        <span class="payout-note">1:1</span>
+                    </div>
+                    <div id="bet-Odd"   class="cell bg-dark" style="grid-column: 10/12; grid-row: 5" onclick="placeBet('Odd')">
+                        <span>Odd</span>
+                        <span class="payout-note">1:1</span>
+                    </div>
+                    <div id="bet-19-36" class="cell bg-dark" style="grid-column: 12/14; grid-row: 5" onclick="placeBet('19-36')">
+                        <span>19-36</span>
+                        <span class="payout-note">1:1</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="h-32"></div> </div>
+
+    <div class="fixed bottom-0 w-full bg-gray-800 border-t border-gray-700 pb-safe z-30 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.3)]">
+        <div class="flex justify-between px-4 py-2 bg-gray-800 overflow-x-auto no-scrollbar space-x-2">
+            <button class="chip-btn selected bg-gray-500" onclick="selectChip(10, this)">10</button>
+            <button class="chip-btn bg-blue-600" onclick="selectChip(50, this)">50</button>
+            <button class="chip-btn bg-purple-600" onclick="selectChip(100, this)">100</button>
+            <button class="chip-btn bg-yellow-600" onclick="selectChip(500, this)">500</button>
+            <button class="chip-btn bg-orange-600" onclick="selectChip(1000, this)">1k</button>
+            <button class="chip-btn bg-red-600 font-black text-[10px]" onclick="selectChip('ALL', this)">ALL</button>
+        </div>
+
+        <div class="grid grid-cols-4 gap-0 h-14">
+            <button onclick="undoLastBet()" class="col-span-1 bg-gray-700 hover:bg-gray-600 text-white font-bold text-xs border-r border-gray-600 flex flex-col items-center justify-center">
+                <span>↩</span><span>Undo</span>
+            </button>
+            <button onclick="clearAllBets()" class="col-span-1 bg-gray-700 hover:bg-gray-600 text-red-400 font-bold text-xs flex flex-col items-center justify-center">
+                <span>🗑️</span><span>Clear</span>
+            </button>
+            <button id="spinBtn" onclick="spin()" class="col-span-2 bg-gradient-to-t from-yellow-600 to-yellow-500 hover:from-yellow-500 hover:to-yellow-400 disabled:from-gray-800 disabled:to-gray-900 disabled:text-gray-600 text-black font-black text-xl active:translate-y-0.5 transition-all">
+                SPIN
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // --- 게임 설정 (배당률 반영) ---
+        // Payouts reference: https://youtu.be/_N3jmvlzqPY
+        const PAYOUTS = {
+            STRAIGHT: 35, // 숫자 하나: 35배
+            COLUMN: 2,    // 2 to 1: 2배
+            DOZEN: 2,     // 1st 12 등: 2배
+            OUTSIDE: 1    // 홀짝, 색상 등: 1배
+        };
+
+        const RED_NUMBERS = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36];
+
+        let state = {
+            balance: 1000,
+            currentChip: 10,
+            bets: {},
+            betHistoryStack: [],
+            isSpinning: false
+        };
+
+        // --- 보드 초기화: 숫자 1~36 생성 ---
+        const boardGrid = document.getElementById('boardGrid');
+        
+        function initBoard() {
+            for (let i = 1; i <= 36; i++) {
+                const cell = document.createElement('div');
+                cell.id = `bet-${i}`;
+                cell.className = 'cell';
+                
+                // 숫자와 배당률 텍스트 추가
+                cell.innerHTML = `
+                    <span>${i}</span>
+                    <span class="payout-note">35:1</span>
+                `;
+                
+                // 색상 지정
+                if (RED_NUMBERS.includes(i)) cell.classList.add('bg-red-felt');
+                else cell.classList.add('bg-black-felt');
+
+                // 그리드 위치 계산 (세로 방향 채우기 아님, 가로 방향으로 숫자 증가하지만 테이블 배치는 세로줄)
+                // 룰렛 테이블 표준: 
+                // Row 1 (Top): 3, 6, 9...
+                // Row 2 (Mid): 2, 5, 8...
+                // Row 3 (Bot): 1, 4, 7...
+                
+                let col = Math.ceil(i / 3) + 1; // 1열은 0이므로 +1
+                let row;
+                if (i % 3 === 0) row = 1;       
+                else if (i % 3 === 2) row = 2;  
+                else row = 3;                   
+
+                cell.style.gridColumn = col;
+                cell.style.gridRow = row;
+                
+                cell.onclick = () => placeBet(cell.id);
+                
+                boardGrid.appendChild(cell);
+            }
+        }
+
+        // --- 베팅 로직 ---
+        function selectChip(amount, btn) {
+            state.currentChip = amount;
+            document.querySelectorAll('.chip-btn').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+        }
+
+        function placeBet(elementId) {
+            let targetId = elementId;
+            if(!elementId.startsWith('bet-')) targetId = `bet-${elementId}`;
+
+            if (state.isSpinning) return;
+
+            let amount = 0;
+            if (state.currentChip === 'ALL') {
+                const currentBetTotal = Object.values(state.bets).reduce((a, b) => a + b, 0);
+                amount = Math.floor((state.balance - currentBetTotal) / 10) * 10;
+            } else {
+                amount = state.currentChip;
+            }
+
+            if (amount <= 0 || state.balance < amount) {
+                showMessage("잔액 부족", "text-red-400");
+                return;
+            }
+
+            state.balance -= amount;
+            state.bets[targetId] = (state.bets[targetId] || 0) + amount;
+            state.betHistoryStack.push({ id: targetId, amount: amount });
+
+            updateUI();
+            showMessage(`${amount} 베팅 완료`);
+        }
+
+        function undoLastBet() {
+            if (state.isSpinning || state.betHistoryStack.length === 0) return;
+            const last = state.betHistoryStack.pop();
+            state.balance += last.amount;
+            state.bets[last.id] -= last.amount;
+            if (state.bets[last.id] <= 0) delete state.bets[last.id];
+            updateUI();
+            showMessage("베팅 취소");
+        }
+
+        function clearAllBets() {
+            if (state.isSpinning || Object.keys(state.bets).length === 0) return;
+            const total = Object.values(state.bets).reduce((a,b)=>a+b,0);
+            state.balance += total;
+            state.bets = {};
+            state.betHistoryStack = [];
+            updateUI();
+            showMessage("초기화 완료");
+        }
+
+        // --- 게임 실행 ---
+        function spin() {
+            if (Object.keys(state.bets).length === 0) {
+                showMessage("베팅을 해주세요!", "text-yellow-400");
+                return;
+            }
+            
+            state.isSpinning = true;
+            updateUI(); 
+
+            // 미국식 룰렛 (0, 00 포함)
+            const outcomes = ['0', '00'];
+            for(let i=1; i<=36; i++) outcomes.push(i.toString());
+
+            const resultDiv = document.getElementById('resultDisplay');
+            
+            let spinInterval = setInterval(() => {
+                const rand = outcomes[Math.floor(Math.random() * outcomes.length)];
+                let colorClass = "text-white";
+                if(rand === '0' || rand === '00') colorClass = "text-green-400";
+                else if(RED_NUMBERS.includes(parseInt(rand))) colorClass = "text-red-500";
+                resultDiv.innerHTML = `<span class="${colorClass}">${rand}</span>`;
+            }, 50);
+
+            setTimeout(() => {
+                clearInterval(spinInterval);
+                try {
+                    const winnerStr = outcomes[Math.floor(Math.random() * outcomes.length)];
+                    processResult(winnerStr);
+                } catch (error) {
+                    console.error(error);
+                    state.isSpinning = false;
+                    updateUI();
+                }
+            }, 1000);
+        }
+
+        function processResult(winnerStr) {
+            const resultDiv = document.getElementById('resultDisplay');
+            const winnerNum = parseInt(winnerStr); 
+            
+            const isZero = (winnerStr === '0' || winnerStr === '00');
+            const isRed = !isZero && RED_NUMBERS.includes(winnerNum);
+            const isBlack = !isZero && !isRed;
+            const isEven = !isZero && (winnerNum % 2 === 0);
+            const isOdd = !isZero && (winnerNum % 2 !== 0);
+            const isLow = !isZero && (winnerNum <= 18);
+            const isHigh = !isZero && (winnerNum >= 19);
+
+            let totalWin = 0;
+            let totalBet = 0;
+
+            for (const [betId, amount] of Object.entries(state.bets)) {
+                totalBet += amount;
+                let multiplier = 0;
+                const key = betId.replace('bet-', '');
+
+                // 1. Straight Up (35:1)
+                if (key === winnerStr) multiplier = PAYOUTS.STRAIGHT;
+                
+                // 2. Outside Bets (1:1)
+                else if (key === 'Red' && isRed) multiplier = PAYOUTS.OUTSIDE;
+                else if (key === 'Black' && isBlack) multiplier = PAYOUTS.OUTSIDE;
+                else if (key === 'Even' && isEven) multiplier = PAYOUTS.OUTSIDE;
+                else if (key === 'Odd' && isOdd) multiplier = PAYOUTS.OUTSIDE;
+                else if (key === '1-18' && isLow) multiplier = PAYOUTS.OUTSIDE;
+                else if (key === '19-36' && isHigh) multiplier = PAYOUTS.OUTSIDE;
+
+                // 3. Dozens (2:1)
+                else if (key === '1st12' && !isZero && winnerNum >= 1 && winnerNum <= 12) multiplier = PAYOUTS.DOZEN;
+                else if (key === '2nd12' && !isZero && winnerNum >= 13 && winnerNum <= 24) multiplier = PAYOUTS.DOZEN;
+                else if (key === '3rd12' && !isZero && winnerNum >= 25 && winnerNum <= 36) multiplier = PAYOUTS.DOZEN;
+
+                // 4. Columns (2:1)
+                else if (key.startsWith('2to1')) {
+                    if (!isZero) {
+                        const colType = key.split('_')[1]; // 3(Top), 2(Mid), 1(Bot)
+                        const rem = winnerNum % 3;
+                        if (colType === '3' && rem === 0) multiplier = PAYOUTS.COLUMN;
+                        if (colType === '2' && rem === 2) multiplier = PAYOUTS.COLUMN;
+                        if (colType === '1' && rem === 1) multiplier = PAYOUTS.COLUMN;
+                    }
+                }
+
+                if (multiplier > 0) {
+                    const profit = amount * multiplier;
+                    state.balance += (amount + profit);
+                    totalWin += profit;
+                    showWinEffect(betId, profit);
+                } else {
+                    totalWin -= amount;
+                }
+            }
+
+            // 결과 표시
+            let colorCls = isZero ? "text-green-400" : (isRed ? "text-red-500" : "text-white");
+            resultDiv.innerHTML = `<span class="${colorCls} text-4xl transform scale-125 transition-transform duration-300">${winnerStr}</span>`;
+
+            const winnerCell = document.getElementById(`bet-${winnerStr}`);
+            if (winnerCell) {
+                winnerCell.classList.add('winner');
+                setTimeout(() => winnerCell.classList.remove('winner'), 2000);
+            }
+
+            if (totalWin >= 0 && totalBet > 0) {
+                showMessage(`🎉 승리! +${totalWin.toLocaleString()}`, "text-yellow-400 font-bold");
+            } else if (totalBet > 0) {
+                showMessage(`패배.. ${Math.abs(totalWin).toLocaleString()} 손실`, "text-gray-400");
+            }
+
+            addHistory(winnerStr, isZero ? 'green' : (isRed ? 'red' : 'black'));
+            state.bets = {};
+            state.betHistoryStack = [];
+            state.isSpinning = false;
+            updateUI();
+        }
+
+        // --- UI Helper ---
+        function showMessage(msg, cls = 'text-gray-400') {
+            document.getElementById('gameMessage').innerHTML = `<span class="${cls}">${msg}</span>`;
+        }
+
+        function updateUI() {
+            document.getElementById('balanceDisplay').textContent = state.balance.toLocaleString();
+            
+            const spinBtn = document.getElementById('spinBtn');
+            const totalBet = Object.values(state.bets).reduce((a,b)=>a+b,0);
+            
+            spinBtn.disabled = state.isSpinning || totalBet === 0;
+            spinBtn.innerHTML = state.isSpinning ? 
+                '<span class="animate-pulse">ROLLING...</span>' : 
+                (totalBet > 0 ? `SPIN <span class="text-sm font-normal text-gray-800">(${totalBet.toLocaleString()})</span>` : "SPIN");
+
+            // 뱃지 및 테두리 초기화
+            document.querySelectorAll('.chip-badge').forEach(e => e.remove());
+            document.querySelectorAll('.cell').forEach(e => e.classList.remove('ring-2', 'ring-yellow-400'));
+
+            for(const [betId, amount] of Object.entries(state.bets)) {
+                const el = document.getElementById(betId);
+                if(el) {
+                    el.classList.add('ring-2', 'ring-yellow-400');
+                    const badge = document.createElement('div');
+                    badge.className = 'chip-badge';
+                    badge.textContent = amount >= 1000 ? (amount/1000).toFixed(1).replace('.0','')+'k' : amount;
+                    el.appendChild(badge);
+                }
+            }
+        }
+
+        function showWinEffect(elementId, profit) {
+            const el = document.getElementById(elementId);
+            if(el) {
+                const float = document.createElement('div');
+                float.className = 'float-win';
+                float.textContent = `+${profit.toLocaleString()}`;
+                el.appendChild(float);
+                setTimeout(() => float.remove(), 1500);
+            }
+        }
+
+        function addHistory(num, type) {
+            const c = document.getElementById('historyContainer');
+            const b = document.createElement('div');
+            b.className = `history-ball ${type==='red'?'bg-red-600':(type==='black'?'bg-gray-700':'bg-green-600')}`;
+            b.textContent = num;
+            c.insertBefore(b, c.children[1]); 
+            if(c.children.length > 20) c.removeChild(c.lastChild);
+        }
+
+        // 실행
+        initBoard();
+        updateUI();
+
+    </script>
+</body>
+</html>
